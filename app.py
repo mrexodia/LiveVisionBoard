@@ -5,6 +5,9 @@ from PySide6.QtCore import (
     QMimeDatabase,
     QUrl,
     Qt,
+    QSize,
+    QPoint,
+    QRectF,
 )
 from PySide6.QtGui import (
     QDragEnterEvent,
@@ -12,6 +15,9 @@ from PySide6.QtGui import (
     QGuiApplication,
     QImageReader,
     QPixmap,
+    QPainter,
+    QColor,
+    QImage,
 )
 from PySide6.QtWidgets import (
     QApplication,
@@ -29,6 +35,9 @@ from PySide6.QtWidgets import (
     QFileDialog,
     QMessageBox,
     QSizePolicy,
+    QGraphicsBlurEffect,
+    QGraphicsScene,
+    QGraphicsPixmapItem,
 )
 
 
@@ -75,8 +84,11 @@ class MainWindow(QMainWindow):
         self.mimedb = QMimeDatabase()
 
         self.list_images = QListWidget()
+        #self.list_images.setViewMode(QListWidget.ViewMode.IconMode)
+        self.list_images.setDragEnabled(True)
         self.list_images.setDragDropMode(QListWidget.DragDropMode.InternalMove)
         self.list_images.setSelectionMode(QListWidget.SelectionMode.SingleSelection)
+        self.list_images.setIconSize(QSize(120, 68))
         self.list_images.itemSelectionChanged.connect(self.onListSelection)
 
         self.label_preview = QLabel()
@@ -93,6 +105,9 @@ class MainWindow(QMainWindow):
         layout_list_bottom.setContentsMargins(0, 0, 0, 0)
         layout_list_bottom.addStretch()
         layout_list_bottom.addWidget(self.button_clear)
+
+        # TODO: add background music controls
+        # TODO: add slide duration controls
 
         layout_list_label = QVBoxLayout()
         layout_list_label.setSpacing(4)
@@ -184,26 +199,26 @@ class MainWindow(QMainWindow):
             event.ignore()
 
     def add_image(self, path: str):
-        reader = QImageReader(path)
-        if not reader.canRead():
+        try:
+            icon_size = self.list_images.iconSize()
+            icon = self.read_image(path, icon_size)
+            item = QListWidgetItem()
+            item.setData(Qt.ItemDataRole.UserRole, path)
+            item.setText(os.path.basename(path))
+            item.setIcon(icon)
+            self.list_images.addItem(item)
+        except Exception as x:
             QMessageBox.critical(
                 self,
                 self.tr("Error"),
                 self.tr("{0}\n\n{1}").format(
-                    reader.errorString(),
+                    str(x),
                     path,
                 ),
             )
-            return
-
-        item = QListWidgetItem()
-        item.setData(Qt.ItemDataRole.UserRole, path)
-        item.setText(os.path.basename(path))
-        index = self.list_images.count()
-        self.list_images.addItem(item)
-        return index
 
     def add_images(self, paths: list[str]):
+        # TODO: insert after current selection
         select_first = self.list_images.currentRow() == -1
         for path in paths:
             self.add_image(path)
@@ -215,6 +230,49 @@ class MainWindow(QMainWindow):
         accepted_urls = self.get_accepted_urls(event.mimeData().urls())
         self.add_images([url.path() for url in accepted_urls])
 
+    def blur_image(self, pixmap: QPixmap, radius: float):
+        scene = QGraphicsScene()
+        item = QGraphicsPixmapItem()
+        item.setPixmap(pixmap)
+        blur = QGraphicsBlurEffect(scene)
+        blur.setBlurRadius(radius)
+        #blur.setBlurHints(QGraphicsBlurEffect.BlurHint.QualityHint)
+        item.setGraphicsEffect(blur)
+        scene.addItem(item)
+        blurred = QPixmap(pixmap.size())
+        blurred.fill(Qt.GlobalColor.transparent)
+        with QPainter(blurred) as painter:
+            scene.render(painter, QRectF(), QRectF(0, 0, pixmap.width(), pixmap.height()))
+        return blurred
+
+    def read_image(self, path: str, size: QSize):
+        # TODO: cache the last N by path
+        reader = QImageReader(path)
+        if reader.canRead():
+            pixmap = QPixmap.fromImageReader(reader)
+
+            # Blur the stretched for the background
+            blurred = pixmap.scaled(size)
+            blurred = self.blur_image(blurred, 50)
+            blurred = self.blur_image(blurred, 20)
+
+            # Resize the main image
+            if pixmap.height() > size.height():
+                pixmap = pixmap.scaledToHeight(size.height(), Qt.TransformationMode.SmoothTransformation)
+            if pixmap.width() > size.width():
+                pixmap = pixmap.scaledToWidth(size.width(), Qt.TransformationMode.SmoothTransformation)
+
+            # Draw the final result
+            result = QPixmap(size)
+            result.fill(Qt.GlobalColor.transparent)
+            with QPainter(result) as painter:
+                painter.drawPixmap(QPoint(0, 0), blurred)
+                midx = (size.width() / 2) - (pixmap.width() / 2)
+                painter.drawPixmap(QPoint(midx, 0), pixmap)
+            return result
+        else:
+            raise Exception(reader.errorString())
+
     def onListSelection(self):
         row = self.list_images.currentRow()
         if row == -1:
@@ -222,21 +280,15 @@ class MainWindow(QMainWindow):
         else:
             item = self.list_images.item(row)
             path: str = item.data(Qt.ItemDataRole.UserRole)
-            reader = QImageReader(path)
-            if reader.canRead():
-                pixmap = QPixmap.fromImageReader(reader)
-                preview = self.label_preview.size()
-                if pixmap.height() > preview.height():
-                    pixmap = pixmap.scaledToHeight(preview.height(), Qt.TransformationMode.SmoothTransformation)
-                if pixmap.width() > preview.width():
-                    pixmap = pixmap.scaledToWidth(preview.width(), Qt.TransformationMode.SmoothTransformation)
-                self.label_preview.setPixmap(pixmap)
-            else:
+            try:
+                preview = self.read_image(path, self.label_preview.size())
+                self.label_preview.setPixmap(preview)
+            except Exception as x:
                 QMessageBox.critical(
                     self,
                     self.tr("Error"),
                     self.tr("{0}\n\n{1}").format(
-                        reader.errorString(),
+                        str(x),
                         path
                     )
                 )
