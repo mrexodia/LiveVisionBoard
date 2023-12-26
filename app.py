@@ -9,6 +9,7 @@ from PySide6.QtCore import (
     QPoint,
     QRectF,
     QSettings,
+    QTimer,
 )
 from PySide6.QtGui import (
     QDragEnterEvent,
@@ -38,6 +39,11 @@ from PySide6.QtWidgets import (
     QGraphicsScene,
     QGraphicsPixmapItem,
     QDoubleSpinBox,
+)
+from PySide6.QtMultimedia import (
+    QMediaPlayer,
+    QAudioOutput,
+    QAudioDevice,
 )
 
 
@@ -88,7 +94,7 @@ class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
 
-        self.setWindowTitle("MusicSlides")
+        self.setWindowTitle(QApplication.applicationName())
         self.resize(1200, 520)
         self.move(QGuiApplication.primaryScreen().geometry().center() - self.frameGeometry().center())
         self.setAcceptDrops(True)
@@ -97,8 +103,15 @@ class MainWindow(QMainWindow):
         self.settings = QSettings()
         self._music_dir = self.settings.value("music_dir", "")
         self._image_dir = self.settings.value("image_dir", "")
+        self.is_previewing = False
+        self.preview_selection = -1
+        self.timer_preview = QTimer(self)
+        self.timer_preview.timeout.connect(self.onTimeout)
         self.music_file = ""
         self.image_cache: dict[str, QPixmap] = {}
+        self.player = QMediaPlayer(self)
+        self.player.setAudioOutput(QAudioOutput(QAudioDevice(), self))
+        self.player.audioOutput()  # NOTE: without this audio doesn't play
 
         self.list_images = QListWidget()
         self.list_images.setDragEnabled(True)
@@ -107,12 +120,12 @@ class MainWindow(QMainWindow):
         self.list_images.setIconSize(QSize(120, 68))
         self.list_images.itemSelectionChanged.connect(self.onListSelection)
 
-        self.label_preview = QLabel()
-        self.label_preview.resize(1920, 1080)
-        self.label_preview.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
-        self.label_preview.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.label_image = QLabel()
+        self.label_image.resize(1920, 1080)
+        self.label_image.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        self.label_image.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
-        self.button_clear = QPushButton("Clear")
+        self.button_clear = QPushButton(self.tr("Clear"))
         self.button_clear.clicked.connect(self.onImageClear)
         self.button_clear.setToolTip(self.tr("Remove all images"))
 
@@ -173,6 +186,8 @@ class MainWindow(QMainWindow):
         self.button_music_remove = QPushButton("✖")
         self.button_music_remove.setToolTip(self.tr("Remove selected music"))
         self.button_music_remove.clicked.connect(self.onMusicRemove)
+        self.button_preview = QPushButton()
+        self.button_preview.clicked.connect(self.onPreview)
         self.button_generate = QPushButton(self.tr("Generate"))
         self.button_generate.clicked.connect(self.onGenerate)
 
@@ -185,12 +200,13 @@ class MainWindow(QMainWindow):
         layout_preview_buttons.addWidget(self.label_music)
         layout_preview_buttons.addWidget(self.button_music_remove)
         layout_preview_buttons.addStretch(0)
+        layout_preview_buttons.addWidget(self.button_preview)
         layout_preview_buttons.addWidget(self.button_generate)
 
         layout_preview = QVBoxLayout()
         layout_preview.setSpacing(3)
         layout_preview.setContentsMargins(0, 0, 0, 0)
-        layout_preview.addWidget(AspectRatioWidget(self.label_preview))
+        layout_preview.addWidget(AspectRatioWidget(self.label_image))
         layout_preview.addLayout(layout_preview_buttons)
 
         layout_main = QHBoxLayout()
@@ -232,14 +248,23 @@ class MainWindow(QMainWindow):
             self.music_dir = value
 
     def update_buttons(self):
+        editing = not self.is_previewing
         count = self.list_images.count()
-        self.button_clear.setEnabled(count > 0)
-        self.button_generate.setEnabled(count > 0)
         row = self.list_images.currentRow()
-        self.button_remove.setEnabled(row != -1)
-        self.button_up.setEnabled(row > 0)
-        self.button_down.setEnabled(row + 1 < count)
+        self.list_images.setEnabled(editing)
+        self.button_clear.setEnabled(editing and count > 0)
+        self.button_generate.setEnabled(editing and count > 0)
+        self.button_preview.setEnabled(count > 0)
+        preview_text = self.tr("Stop") if self.is_previewing else self.tr("Preview")
+        self.button_preview.setText(preview_text)
+        self.button_add.setEnabled(editing)
+        self.button_remove.setEnabled(editing and row != -1)
+        self.button_up.setEnabled(editing and row > 0)
+        self.button_down.setEnabled(editing and row + 1 < count)
+        self.spin_duration.setEnabled(editing)
+        self.button_music.setEnabled(editing)
         self.button_music_remove.setVisible(len(self.music_file) > 0)
+        self.button_music_remove.setEnabled(editing)
 
     def read_image_cache(self, path: str):
         if path in self.image_cache:
@@ -344,13 +369,13 @@ class MainWindow(QMainWindow):
     def onListSelection(self):
         row = self.list_images.currentRow()
         if row == -1:
-            self.label_preview.setPixmap(QPixmap())
+            self.label_image.setPixmap(QPixmap())
         else:
             item = self.list_images.item(row)
             path: str = item.data(Qt.ItemDataRole.UserRole)
             try:
-                preview = self.read_image(path, self.label_preview.size())
-                self.label_preview.setPixmap(preview)
+                preview = self.read_image(path, self.label_image.size())
+                self.label_image.setPixmap(preview)
             except Exception as x:
                 QMessageBox.critical(
                     self,
@@ -425,6 +450,35 @@ class MainWindow(QMainWindow):
         self.music_file = ""
         self.label_music.setText("")
         self.update_buttons()
+
+    def onPreview(self):
+        self.is_previewing = not self.is_previewing
+        if self.is_previewing:
+            if self.music_file:
+                self.player.setSource(QUrl.fromLocalFile(self.music_file))
+                self.player.play()
+            self.preview_selection = self.list_images.currentRow()
+            self.list_images.setCurrentRow(0)
+            self.timer_preview.start(int(self.spin_duration.value() * 1000) + 50)
+        else:
+            self.player.stop()
+            self.timer_preview.stop()
+            self.list_images.setCurrentRow(self.preview_selection)
+            self.list_images.setFocus()
+
+        self.update_buttons()
+
+    def onTimeout(self):
+        row = self.list_images.currentRow() + 1
+        if row  == self.list_images.count():
+            self.player.stop()
+            self.timer_preview.stop()
+            self.is_previewing = False
+            self.update_buttons()
+            self.list_images.setCurrentRow(self.preview_selection)
+            self.list_images.setFocus()
+        else:
+            self.list_images.setCurrentRow(row)
 
     def onGenerate(self):
         images = [self.list_images.item(row).data(Qt.ItemDataRole.UserRole) for row in range(self.list_images.count())]
