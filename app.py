@@ -1,5 +1,8 @@
 import sys
 import os
+import shutil
+import tempfile
+import subprocess
 
 from PySide6.QtCore import (
     QMimeDatabase,
@@ -51,11 +54,81 @@ from PySide6.QtMultimedia import (
 )
 
 
+def format_decimals(value: float, decimals: int):
+    return f"{{:.{decimals}f}}".format(value)
+
+
+VIDEO_FILTER = """
+split [main][tmp];
+[tmp]scale=hd1080,setsar=1,boxblur=20:20[b];
+[main]scale=-1:1080[v];
+[b][v]overlay=(W-w)/2
+""".strip()
+TMP_DIR = ""
+
 def generate_video(images: list[str], duration: float, music: str, output: str):
-    print(f"generate_video({repr(images)}, {repr(duration)}, {repr(music)}, {repr(output)})")
-    import time
-    time.sleep(5)
-    return "Not implemented!"
+    total_duration = int(duration * len(images))
+    fade_in_duration = 1
+    fade_out_duration = 2
+    fade_out_start = total_duration - fade_out_duration
+    if fade_out_start < 1:
+        fade_out_start = total_duration
+        fade_out_duration = 0
+
+    try:
+        # TODO: download for system
+        ffmpeg = "/opt/homebrew/bin/ffmpeg"
+
+        if music:
+            stem, _ = os.path.splitext(os.path.basename(output))
+            output_noaudio = os.path.join(os.path.dirname(output), f"{stem}.noaudio.mp4")
+        else:
+            output_noaudio = output
+
+        concat_script = ""
+        for image in images:
+            concat_script += f"file '{image}'\n"
+            concat_script += f"duration {format_decimals(duration, 1)}\n"
+
+        concat_file = os.path.join(TMP_DIR, "files.txt")
+        with open(concat_file, "w") as f:
+            f.write(concat_script)
+
+        filter_file = os.path.join(TMP_DIR, "blur-resize.filter")
+        with open(filter_file, "w") as f:
+            f.write(VIDEO_FILTER)
+
+        args1 = f'"{ffmpeg}" -y -f concat -safe 0 -i "{concat_file}" -filter_complex_script "{filter_file}" -c:v libx264 -r 30 -pix_fmt yuv420p "{output_noaudio}"'
+        print(args1)
+        result1 = subprocess.run(args1, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, shell=True)
+        output1 = result1.stdout.decode(errors="ignore").strip()
+        print(output1)
+        print("=========")
+        if result1.returncode != 0:
+            # TODO: save the output for the error report
+            if os.path.exists(output_noaudio):
+                os.remove(output_noaudio)
+            return f"ffmpeg (1) exited with code {result1.returncode}"
+
+        if music:
+            args2 = f'"{ffmpeg}" -y -i "{output_noaudio}" -i "{music}" -c:v copy -filter_complex "afade=in:st=0:d={fade_in_duration},afade=out:st={fade_out_start}:d={fade_out_duration}" -map 0:v:0 -map 1:a:0 -c:a aac -b:a 192k -shortest "{output}"'
+            print(args2)
+            result2 = subprocess.run(args2, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, shell=True)
+            output2 = result2.stdout.decode(errors="ignore").strip()
+            print(output2)
+            print("=========")
+
+            if result2.returncode != 0:
+                # TODO: save the output for the error report
+                if os.path.exists(output_noaudio):
+                    os.remove(output_noaudio)
+                if os.path.exists(output):
+                    os.remove(output)
+                return f"ffmpeg (2) exited with code {result2.returncode}"
+
+        return None
+    except Exception as x:
+        return str(x)
 
 
 class GenerateVideoThread(QThread):
@@ -107,7 +180,7 @@ class DoubleSpinBox(QDoubleSpinBox):
         super().__init__(parent)
 
     def textFromValue(self, val: float) -> str:
-        return f"{{:.{self.decimals()}f}}".format(val)
+        return format_decimals(val, self.decimals())
 
 
 class MainWindow(QMainWindow):
@@ -538,6 +611,7 @@ class MainWindow(QMainWindow):
 
         self.setWindowTitle(self.tr("{} (saving video)").format(QApplication.applicationName()))
         self.setEnabled(False)
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
 
         images = [self.list_images.item(row).data(Qt.ItemDataRole.UserRole) for row in range(self.list_images.count())]
         self.thread_generate.images = images
@@ -549,6 +623,7 @@ class MainWindow(QMainWindow):
     def onFinished(self):
         self.setEnabled(True)
         self.setWindowTitle(QApplication.applicationName())
+        QApplication.restoreOverrideCursor()
 
         error = self.thread_generate.error
         if error is None:
@@ -573,4 +648,8 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    TMP_DIR = tempfile.mkdtemp("MusicSlides")
+    try:
+        main()
+    finally:
+        shutil.rmtree(TMP_DIR, ignore_errors=True)
