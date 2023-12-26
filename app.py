@@ -18,6 +18,7 @@ from PySide6.QtGui import (
     QImageReader,
     QPixmap,
     QPainter,
+    QResizeEvent,
 )
 from PySide6.QtWidgets import (
     QApplication,
@@ -52,10 +53,10 @@ def generate_video(images: list[str], duration: float, music: str):
 
 
 class AspectRatioWidget(QWidget):
-    def __init__(self, widget, parent=None):
+    def __init__(self, widget: QWidget, parent: QWidget = None):
         super().__init__(parent)
         self.aspect_ratio = widget.size().width() / widget.size().height()
-        #  add spacer, then widget, then spacer
+        # add spacer, then widget, then spacer
         layout = QBoxLayout(QBoxLayout.Direction.LeftToRight)
         layout.setSpacing(0)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -64,9 +65,9 @@ class AspectRatioWidget(QWidget):
         layout.addItem(QSpacerItem(0, 0))
         self.setLayout(layout)
 
-    def resizeEvent(self, e):
-        w = e.size().width()
-        h = e.size().height()
+    def resizeEvent(self, event: QResizeEvent):
+        w = event.size().width()
+        h = event.size().height()
 
         if w / h > self.aspect_ratio:  # too wide
             self.layout().setDirection(QBoxLayout.Direction.LeftToRight)
@@ -107,6 +108,9 @@ class MainWindow(QMainWindow):
         self.preview_selection = -1
         self.timer_preview = QTimer(self)
         self.timer_preview.timeout.connect(self.onTimeout)
+        self.timer_resize = QTimer(self)
+        self.timer_resize.setSingleShot(True)
+        self.timer_resize.timeout.connect(self.onListSelection)
         self.music_file = ""
         self.image_cache: dict[str, QPixmap] = {}
         self.player = QMediaPlayer(self)
@@ -329,9 +333,11 @@ class MainWindow(QMainWindow):
             )
 
     def add_images(self, paths: list[str]):
+        self.list_images.setUpdatesEnabled(False)
         for path in paths:
             self.add_image(path)
-        self.update_buttons()
+        self.list_images.setUpdatesEnabled(True)
+        self.onListSelection()
 
     def blur_image(self, pixmap: QPixmap, radius: float):
         scene = QGraphicsScene()
@@ -366,7 +372,15 @@ class MainWindow(QMainWindow):
         accepted_urls = self.get_accepted_urls(event.mimeData().urls())
         self.add_images([url.path() for url in accepted_urls])
 
+    def resizeEvent(self, event: QResizeEvent) -> None:
+        # Resize the image with a debounce
+        self.label_image.setPixmap(QPixmap())
+        self.timer_resize.start(250)
+
     def onListSelection(self):
+        if not self.list_images.updatesEnabled():
+            return
+
         row = self.list_images.currentRow()
         if row == -1:
             self.label_image.setPixmap(QPixmap())
@@ -465,7 +479,6 @@ class MainWindow(QMainWindow):
             self.timer_preview.stop()
             self.list_images.setCurrentRow(self.preview_selection)
             self.list_images.setFocus()
-
         self.update_buttons()
 
     def onTimeout(self):
