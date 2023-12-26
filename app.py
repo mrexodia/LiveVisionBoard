@@ -41,6 +41,10 @@ from PySide6.QtWidgets import (
 )
 
 
+def generate_video(images: list[str], duration: float, music: str):
+    print(f"generate_video({repr(images)}, {repr(duration)}, {repr(music)})")
+
+
 class AspectRatioWidget(QWidget):
     def __init__(self, widget, parent=None):
         super().__init__(parent)
@@ -70,6 +74,14 @@ class AspectRatioWidget(QWidget):
         self.layout().setStretch(0, outer_stretch)
         self.layout().setStretch(1, widget_stretch)
         self.layout().setStretch(2, outer_stretch)
+
+
+class DoubleSpinBox(QDoubleSpinBox):
+    def __init__(self, parent: QWidget = None) -> None:
+        super().__init__(parent)
+
+    def textFromValue(self, val: float) -> str:
+        return f"{{:.{self.decimals()}f}}".format(val)
 
 
 class MainWindow(QMainWindow):
@@ -119,7 +131,7 @@ class MainWindow(QMainWindow):
 
         self.button_add = QPushButton("+")
         self.button_add.clicked.connect(self.onImageAdd)
-        self.button_add.setToolTip(self.tr("Add new image"))
+        self.button_add.setToolTip(self.tr("Add new image after selection"))
         self.button_remove = QPushButton("-")
         self.button_remove.clicked.connect(self.onImageRemove)
         self.button_remove.setToolTip(self.tr("Remove selected image"))
@@ -146,11 +158,14 @@ class MainWindow(QMainWindow):
         layout_list.addLayout(layout_list_label)
         layout_list.addLayout(layout_list_buttons)
 
-        self.label_time = QLabel(self.tr("Seconds per slide:"))
-        self.spin_time = QDoubleSpinBox()
-        self.spin_time.setRange(0.1, 60.0)
-        self.spin_time.setSingleStep(0.1)
-        self.spin_time.setValue(1.0)
+        self.label_time = QLabel(self.tr("Duration:"))
+        self.spin_duration = DoubleSpinBox()
+        self.spin_duration.setToolTip(self.tr("Seconds per slide"))
+        self.spin_duration.setRange(0.1, 60.0)
+        self.spin_duration.setSingleStep(0.1)
+        self.spin_duration.setValue(1.0)
+        self.spin_duration.setSuffix("s")
+        self.spin_duration.setDecimals(1)
         self.button_music = QPushButton(self.tr("Music"))
         self.button_music.setToolTip(self.tr("Select background music file"))
         self.button_music.clicked.connect(self.onMusic)
@@ -165,7 +180,7 @@ class MainWindow(QMainWindow):
         layout_preview_buttons.setSpacing(4)
         layout_preview_buttons.setContentsMargins(0, 0, 0, 0)
         layout_preview_buttons.addWidget(self.label_time)
-        layout_preview_buttons.addWidget(self.spin_time)
+        layout_preview_buttons.addWidget(self.spin_duration)
         layout_preview_buttons.addWidget(self.button_music)
         layout_preview_buttons.addWidget(self.label_music)
         layout_preview_buttons.addWidget(self.button_music_remove)
@@ -412,10 +427,8 @@ class MainWindow(QMainWindow):
         self.update_buttons()
 
     def onGenerate(self):
-        paths = [self.list_images.item(row).data(Qt.ItemDataRole.UserRole) for row in range(self.list_images.count())]
-        print(paths)
-        seconds = self.spin_time.value()
-        print(f"Seconds per slide: {seconds}, music: {self.music_file}")
+        images = [self.list_images.item(row).data(Qt.ItemDataRole.UserRole) for row in range(self.list_images.count())]
+        generate_video(images, self.spin_duration.value(), self.music_file)
 
 
 def main():
