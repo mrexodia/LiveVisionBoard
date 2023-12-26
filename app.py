@@ -3,6 +3,7 @@ import os
 
 from PySide6.QtCore import (
     QMimeDatabase,
+    QObject,
     QUrl,
     Qt,
     QSize,
@@ -10,6 +11,7 @@ from PySide6.QtCore import (
     QRectF,
     QSettings,
     QTimer,
+    QThread,
 )
 from PySide6.QtGui import (
     QDragEnterEvent,
@@ -19,6 +21,7 @@ from PySide6.QtGui import (
     QPixmap,
     QPainter,
     QResizeEvent,
+    QDesktopServices,
 )
 from PySide6.QtWidgets import (
     QApplication,
@@ -48,8 +51,24 @@ from PySide6.QtMultimedia import (
 )
 
 
-def generate_video(images: list[str], duration: float, music: str):
-    print(f"generate_video({repr(images)}, {repr(duration)}, {repr(music)})")
+def generate_video(images: list[str], duration: float, music: str, output: str):
+    print(f"generate_video({repr(images)}, {repr(duration)}, {repr(music)}, {repr(output)})")
+    import time
+    time.sleep(5)
+    return "Not implemented!"
+
+
+class GenerateVideoThread(QThread):
+    def __init__(self, parent: QObject = None) -> None:
+        super().__init__(parent)
+        self.images: list[str] = []
+        self.duration = 0.0
+        self.music = ""
+        self.output = ""
+        self.error: str = None
+
+    def run(self):
+        self.error = generate_video(self.images, self.duration, self.music, self.output)
 
 
 class AspectRatioWidget(QWidget):
@@ -116,6 +135,8 @@ class MainWindow(QMainWindow):
         self.player = QMediaPlayer(self)
         self.player.setAudioOutput(QAudioOutput(QAudioDevice(), self))
         self.player.audioOutput()  # NOTE: without this audio doesn't play
+        self.thread_generate = GenerateVideoThread(self)
+        self.thread_generate.finished.connect(self.onFinished)
 
         self.list_images = QListWidget()
         self.list_images.setDragEnabled(True)
@@ -192,7 +213,7 @@ class MainWindow(QMainWindow):
         self.button_music_remove.clicked.connect(self.onMusicRemove)
         self.button_preview = QPushButton()
         self.button_preview.clicked.connect(self.onPreview)
-        self.button_generate = QPushButton(self.tr("Generate"))
+        self.button_generate = QPushButton(self.tr("Save Video"))
         self.button_generate.clicked.connect(self.onGenerate)
 
         layout_preview_buttons = QHBoxLayout()
@@ -414,7 +435,12 @@ class MainWindow(QMainWindow):
             self.update_buttons()
 
     def onImageAdd(self):
-        paths, _ = QFileDialog.getOpenFileNames(self, self.tr("Open Image"), self.image_dir, self.tr("Image files (*.jpg *.jpeg *.png)"))
+        paths, _ = QFileDialog.getOpenFileNames(
+            self,
+            self.tr("Open Image"),
+            self.image_dir,
+            self.tr("Image files (*.jpg *.jpeg *.png)")
+        )
         if len(paths) > 0:
             self.image_dir = os.path.dirname(paths[0])
         self.add_images(paths)
@@ -453,12 +479,19 @@ class MainWindow(QMainWindow):
         self.update_buttons()
 
     def onMusic(self):
-        path, _ = QFileDialog.getOpenFileName(self, self.tr("Select music"), self.music_dir, self.tr("Music files (*.mp3 *.wav *.m4a *.wma *.aac)"))
-        if path:
-            self.music_file = path
-            self.music_dir = os.path.dirname(path)
-            self.label_music.setText(os.path.basename(path))
-            self.update_buttons()
+        path, _ = QFileDialog.getOpenFileName(
+            self,
+            self.tr("Select music"),
+            self.music_dir,
+            self.tr("Music files (*.mp3 *.wav *.m4a *.wma *.aac)")
+        )
+        if not path:
+            return
+
+        self.music_file = path
+        self.music_dir = os.path.dirname(path)
+        self.label_music.setText(os.path.basename(path))
+        self.update_buttons()
 
     def onMusicRemove(self):
         self.music_file = ""
@@ -494,8 +527,38 @@ class MainWindow(QMainWindow):
             self.list_images.setCurrentRow(row)
 
     def onGenerate(self):
+        output, _ = QFileDialog.getSaveFileName(
+            self,
+            self.tr("Save video (MP4)"),
+            self.image_dir,
+            self.tr("Video file (*.mp4)")
+        )
+        if not output:
+            return
+
+        self.setWindowTitle(self.tr("{} (saving video)").format(QApplication.applicationName()))
+        self.setEnabled(False)
+
         images = [self.list_images.item(row).data(Qt.ItemDataRole.UserRole) for row in range(self.list_images.count())]
-        generate_video(images, self.spin_duration.value(), self.music_file)
+        self.thread_generate.images = images
+        self.thread_generate.duration = self.spin_duration.value()
+        self.thread_generate.music = self.music_file
+        self.thread_generate.output = output
+        self.thread_generate.start()
+
+    def onFinished(self):
+        self.setEnabled(True)
+        self.setWindowTitle(QApplication.applicationName())
+
+        error = self.thread_generate.error
+        if error is None:
+            QDesktopServices.openUrl(QUrl.fromLocalFile(self.thread_generate.output))
+        else:
+            QMessageBox.critical(
+                self,
+                self.tr("Error"),
+                self.tr("Video creation failed:\n\n{}").format(error)
+            )
 
 
 def main():
