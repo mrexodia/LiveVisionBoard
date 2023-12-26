@@ -8,6 +8,7 @@ from PySide6.QtCore import (
     QSize,
     QPoint,
     QRectF,
+    QSettings,
 )
 from PySide6.QtGui import (
     QDragEnterEvent,
@@ -16,8 +17,6 @@ from PySide6.QtGui import (
     QImageReader,
     QPixmap,
     QPainter,
-    QColor,
-    QImage,
 )
 from PySide6.QtWidgets import (
     QApplication,
@@ -38,6 +37,7 @@ from PySide6.QtWidgets import (
     QGraphicsBlurEffect,
     QGraphicsScene,
     QGraphicsPixmapItem,
+    QDoubleSpinBox,
 )
 
 
@@ -82,9 +82,13 @@ class MainWindow(QMainWindow):
         self.setAcceptDrops(True)
 
         self.mimedb = QMimeDatabase()
+        self.settings = QSettings()
+        self._music_dir = self.settings.value("music_dir", "")
+        self._image_dir = self.settings.value("image_dir", "")
+        self.music_file = ""
+        self.image_cache: dict[str, QPixmap] = {}
 
         self.list_images = QListWidget()
-        #self.list_images.setViewMode(QListWidget.ViewMode.IconMode)
         self.list_images.setDragEnabled(True)
         self.list_images.setDragDropMode(QListWidget.DragDropMode.InternalMove)
         self.list_images.setSelectionMode(QListWidget.SelectionMode.SingleSelection)
@@ -105,9 +109,6 @@ class MainWindow(QMainWindow):
         layout_list_bottom.setContentsMargins(0, 0, 0, 0)
         layout_list_bottom.addStretch()
         layout_list_bottom.addWidget(self.button_clear)
-
-        # TODO: add background music controls
-        # TODO: add slide duration controls
 
         layout_list_label = QVBoxLayout()
         layout_list_label.setSpacing(4)
@@ -145,15 +146,31 @@ class MainWindow(QMainWindow):
         layout_list.addLayout(layout_list_label)
         layout_list.addLayout(layout_list_buttons)
 
+        self.label_time = QLabel(self.tr("Seconds per slide:"))
+        self.spin_time = QDoubleSpinBox()
+        self.spin_time.setRange(0.1, 60.0)
+        self.spin_time.setSingleStep(0.1)
+        self.spin_time.setValue(1.0)
+        self.button_music = QPushButton(self.tr("Music"))
+        self.button_music.setToolTip(self.tr("Select background music file"))
+        self.button_music.clicked.connect(self.onMusic)
+        self.label_music = QLabel("")
+        self.button_music_remove = QPushButton("✖")
+        self.button_music_remove.setToolTip(self.tr("Remove selected music"))
+        self.button_music_remove.clicked.connect(self.onMusicRemove)
         self.button_generate = QPushButton(self.tr("Generate"))
         self.button_generate.clicked.connect(self.onGenerate)
 
         layout_preview_buttons = QHBoxLayout()
         layout_preview_buttons.setSpacing(4)
         layout_preview_buttons.setContentsMargins(0, 0, 0, 0)
+        layout_preview_buttons.addWidget(self.label_time)
+        layout_preview_buttons.addWidget(self.spin_time)
+        layout_preview_buttons.addWidget(self.button_music)
+        layout_preview_buttons.addWidget(self.label_music)
+        layout_preview_buttons.addWidget(self.button_music_remove)
         layout_preview_buttons.addStretch(0)
         layout_preview_buttons.addWidget(self.button_generate)
-        layout_preview_buttons.addStretch(0)
 
         layout_preview = QVBoxLayout()
         layout_preview.setSpacing(3)
@@ -175,6 +192,30 @@ class MainWindow(QMainWindow):
 
         self.update_buttons()
 
+    @property
+    def music_dir(self):
+        return self._music_dir
+
+    @music_dir.setter
+    def music_dir(self, value):
+        self._music_dir = value
+        self.settings.setValue("music_dir", value)
+        self.settings.sync()
+        if not self.image_dir:
+            self.image_dir = value
+
+    @property
+    def image_dir(self):
+        return self._image_dir
+
+    @image_dir.setter
+    def image_dir(self, value):
+        self._image_dir = value
+        self.settings.setValue("image_dir", value)
+        self.settings.sync()
+        if not self.music_dir:
+            self.music_dir = value
+
     def update_buttons(self):
         count = self.list_images.count()
         self.button_clear.setEnabled(count > 0)
@@ -183,6 +224,89 @@ class MainWindow(QMainWindow):
         self.button_remove.setEnabled(row != -1)
         self.button_up.setEnabled(row > 0)
         self.button_down.setEnabled(row + 1 < count)
+        self.button_music_remove.setVisible(len(self.music_file) > 0)
+
+    def read_image_cache(self, path: str):
+        if path in self.image_cache:
+            return self.image_cache[path]
+        reader = QImageReader(path)
+        if not reader.canRead():
+            raise Exception(reader.errorString())
+        pixmap = QPixmap.fromImageReader(reader)
+        self.image_cache[path] = pixmap
+        # Evict images from the cache
+        if len(self.image_cache) > 20:
+            first_key = None
+            for key in self.image_cache:
+                first_key = key
+                break
+            del self.image_cache[first_key]
+        return pixmap
+
+    def read_image(self, path: str, size: QSize):
+        pixmap = self.read_image_cache(path)
+
+        # Blur the stretched for the background
+        blurred = pixmap.scaled(size)
+        blurred = self.blur_image(blurred, 50)
+        blurred = self.blur_image(blurred, 20)
+
+        # Resize the main image
+        if pixmap.height() > size.height():
+            pixmap = pixmap.scaledToHeight(size.height(), Qt.TransformationMode.SmoothTransformation)
+        if pixmap.width() > size.width():
+            pixmap = pixmap.scaledToWidth(size.width(), Qt.TransformationMode.SmoothTransformation)
+
+        # Draw the final result
+        result = QPixmap(size)
+        result.fill(Qt.GlobalColor.transparent)
+        with QPainter(result) as painter:
+            painter.drawPixmap(QPoint(0, 0), blurred)
+            midx = (size.width() / 2) - (pixmap.width() / 2)
+            midy = (size.height() / 2) - (pixmap.height() / 2)
+            painter.drawPixmap(QPoint(midx, midy), pixmap)
+        return result
+
+    def add_image(self, path: str):
+        try:
+            icon_size = self.list_images.iconSize()
+            icon = self.read_image(path, icon_size)
+            item = QListWidgetItem()
+            item.setData(Qt.ItemDataRole.UserRole, path)
+            item.setText(os.path.basename(path))
+            item.setIcon(icon)
+            row = self.list_images.currentRow() + 1
+            self.list_images.insertItem(row, item)
+            self.list_images.setCurrentRow(row)
+        except Exception as x:
+            QMessageBox.critical(
+                self,
+                self.tr("Error"),
+                self.tr("{0}\n\n{1}").format(
+                    str(x),
+                    path,
+                ),
+            )
+
+    def add_images(self, paths: list[str]):
+        for path in paths:
+            self.add_image(path)
+        self.update_buttons()
+
+    def blur_image(self, pixmap: QPixmap, radius: float):
+        scene = QGraphicsScene()
+        item = QGraphicsPixmapItem()
+        item.setPixmap(pixmap)
+        blur = QGraphicsBlurEffect(scene)
+        blur.setBlurRadius(radius)
+        blur.setBlurHints(QGraphicsBlurEffect.BlurHint.QualityHint)
+        item.setGraphicsEffect(blur)
+        scene.addItem(item)
+        blurred = QPixmap(pixmap.size())
+        blurred.fill(Qt.GlobalColor.transparent)
+        with QPainter(blurred) as painter:
+            scene.render(painter, QRectF(), QRectF(0, 0, pixmap.width(), pixmap.height()))
+        return blurred
 
     def get_accepted_urls(self, urls: list[QUrl]):
         result: list[QUrl] = []
@@ -198,80 +322,9 @@ class MainWindow(QMainWindow):
         else:
             event.ignore()
 
-    def add_image(self, path: str):
-        try:
-            icon_size = self.list_images.iconSize()
-            icon = self.read_image(path, icon_size)
-            item = QListWidgetItem()
-            item.setData(Qt.ItemDataRole.UserRole, path)
-            item.setText(os.path.basename(path))
-            item.setIcon(icon)
-            self.list_images.addItem(item)
-        except Exception as x:
-            QMessageBox.critical(
-                self,
-                self.tr("Error"),
-                self.tr("{0}\n\n{1}").format(
-                    str(x),
-                    path,
-                ),
-            )
-
-    def add_images(self, paths: list[str]):
-        # TODO: insert after current selection
-        select_first = self.list_images.currentRow() == -1
-        for path in paths:
-            self.add_image(path)
-        if select_first:
-            self.list_images.setCurrentRow(0)
-        self.update_buttons()
-
     def dropEvent(self, event: QDropEvent) -> None:
         accepted_urls = self.get_accepted_urls(event.mimeData().urls())
         self.add_images([url.path() for url in accepted_urls])
-
-    def blur_image(self, pixmap: QPixmap, radius: float):
-        scene = QGraphicsScene()
-        item = QGraphicsPixmapItem()
-        item.setPixmap(pixmap)
-        blur = QGraphicsBlurEffect(scene)
-        blur.setBlurRadius(radius)
-        #blur.setBlurHints(QGraphicsBlurEffect.BlurHint.QualityHint)
-        item.setGraphicsEffect(blur)
-        scene.addItem(item)
-        blurred = QPixmap(pixmap.size())
-        blurred.fill(Qt.GlobalColor.transparent)
-        with QPainter(blurred) as painter:
-            scene.render(painter, QRectF(), QRectF(0, 0, pixmap.width(), pixmap.height()))
-        return blurred
-
-    def read_image(self, path: str, size: QSize):
-        # TODO: cache the last N by path
-        reader = QImageReader(path)
-        if reader.canRead():
-            pixmap = QPixmap.fromImageReader(reader)
-
-            # Blur the stretched for the background
-            blurred = pixmap.scaled(size)
-            blurred = self.blur_image(blurred, 50)
-            blurred = self.blur_image(blurred, 20)
-
-            # Resize the main image
-            if pixmap.height() > size.height():
-                pixmap = pixmap.scaledToHeight(size.height(), Qt.TransformationMode.SmoothTransformation)
-            if pixmap.width() > size.width():
-                pixmap = pixmap.scaledToWidth(size.width(), Qt.TransformationMode.SmoothTransformation)
-
-            # Draw the final result
-            result = QPixmap(size)
-            result.fill(Qt.GlobalColor.transparent)
-            with QPainter(result) as painter:
-                painter.drawPixmap(QPoint(0, 0), blurred)
-                midx = (size.width() / 2) - (pixmap.width() / 2)
-                painter.drawPixmap(QPoint(midx, 0), pixmap)
-            return result
-        else:
-            raise Exception(reader.errorString())
 
     def onListSelection(self):
         row = self.list_images.currentRow()
@@ -301,13 +354,15 @@ class MainWindow(QMainWindow):
             self.tr("Are you sure you want to remove all images?"),
             QMessageBox.StandardButton.Yes,
             QMessageBox.StandardButton.No,
-        ):
+        ) == QMessageBox.StandardButton.Yes:
             self.list_images.clear()
             self.onListSelection()
             self.update_buttons()
 
     def onImageAdd(self):
-        paths, _ = QFileDialog.getOpenFileNames(self, self.tr("Open Image"), "", self.tr("Image files (*.jpg *.jpeg *.png)"))
+        paths, _ = QFileDialog.getOpenFileNames(self, self.tr("Open Image"), self.image_dir, self.tr("Image files (*.jpg *.jpeg *.png)"))
+        if len(paths) > 0:
+            self.image_dir = os.path.dirname(paths[0])
         self.add_images(paths)
 
     def onImageRemove(self):
@@ -343,13 +398,31 @@ class MainWindow(QMainWindow):
             self.list_images.setCurrentRow(row_num+1)
         self.update_buttons()
 
+    def onMusic(self):
+        path, _ = QFileDialog.getOpenFileName(self, self.tr("Select music"), self.music_dir, self.tr("Music files (*.mp3 *.wav *.m4a *.wma *.aac)"))
+        if path:
+            self.music_file = path
+            self.music_dir = os.path.dirname(path)
+            self.label_music.setText(os.path.basename(path))
+            self.update_buttons()
+
+    def onMusicRemove(self):
+        self.music_file = ""
+        self.label_music.setText("")
+        self.update_buttons()
+
     def onGenerate(self):
         paths = [self.list_images.item(row).data(Qt.ItemDataRole.UserRole) for row in range(self.list_images.count())]
         print(paths)
+        seconds = self.spin_time.value()
+        print(f"Seconds per slide: {seconds}, music: {self.music_file}")
 
 
 def main():
     app = QApplication(sys.argv)
+    app.setOrganizationName("Ogilvie")
+    app.setOrganizationDomain("ogilvie.pl")
+    app.setApplicationName("MusicSlides")
     main = MainWindow()
     main.show()
     main.raise_()
