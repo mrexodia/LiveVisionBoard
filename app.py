@@ -46,6 +46,7 @@ from PySide6.QtWidgets import (
     QGraphicsScene,
     QGraphicsPixmapItem,
     QDoubleSpinBox,
+    QCheckBox,
 )
 from PySide6.QtMultimedia import (
     QMediaPlayer,
@@ -66,10 +67,10 @@ split [main][tmp];
 """.strip()
 TMP_DIR = ""
 
-def generate_video(images: list[str], duration: float, music: str, output: str):
+def generate_video(images: list[str], duration: float, music: str, fade_in: bool, fade_out: bool, output: str):
     total_duration = int(duration * len(images))
-    fade_in_duration = 1
-    fade_out_duration = 2
+    fade_in_duration = 1 if fade_in else 0
+    fade_out_duration = 2 if fade_out else 0
     fade_out_start = total_duration - fade_out_duration
     if fade_out_start < 1:
         fade_out_start = total_duration
@@ -105,7 +106,7 @@ def generate_video(images: list[str], duration: float, music: str, output: str):
         print(output1)
         print("=========")
         if result1.returncode != 0:
-            # TODO: save the output for the error report
+            # TODO: save stdout for the error report
             if os.path.exists(output_noaudio):
                 os.remove(output_noaudio)
             return f"ffmpeg (1) exited with code {result1.returncode}"
@@ -118,10 +119,11 @@ def generate_video(images: list[str], duration: float, music: str, output: str):
             print(output2)
             print("=========")
 
+            if os.path.exists(output_noaudio):
+                os.remove(output_noaudio)
+
             if result2.returncode != 0:
-                # TODO: save the output for the error report
-                if os.path.exists(output_noaudio):
-                    os.remove(output_noaudio)
+                # TODO: save stdout for the error report
                 if os.path.exists(output):
                     os.remove(output)
                 return f"ffmpeg (2) exited with code {result2.returncode}"
@@ -137,11 +139,20 @@ class GenerateVideoThread(QThread):
         self.images: list[str] = []
         self.duration = 0.0
         self.music = ""
+        self.fade_in = True
+        self.fade_out = True
         self.output = ""
         self.error: str = None
 
     def run(self):
-        self.error = generate_video(self.images, self.duration, self.music, self.output)
+        self.error = generate_video(
+            self.images,
+            self.duration,
+            self.music,
+            self.fade_in,
+            self.fade_out,
+            self.output,
+        )
 
 
 class AspectRatioWidget(QWidget):
@@ -210,6 +221,8 @@ class MainWindow(QMainWindow):
         self.player.audioOutput()  # NOTE: without this audio doesn't play
         self.thread_generate = GenerateVideoThread(self)
         self.thread_generate.finished.connect(self.onFinished)
+        self.fade_in = False
+        self.fade_out = True
 
         self.list_images = QListWidget()
         self.list_images.setDragEnabled(True)
@@ -269,7 +282,7 @@ class MainWindow(QMainWindow):
         layout_list.addLayout(layout_list_label)
         layout_list.addLayout(layout_list_buttons)
 
-        self.label_time = QLabel(self.tr("Duration:"))
+        self.label_time = QLabel(self.tr("Per slide:"))
         self.spin_duration = DoubleSpinBox()
         self.spin_duration.setToolTip(self.tr("Seconds per slide"))
         self.spin_duration.setRange(0.1, 60.0)
@@ -281,9 +294,23 @@ class MainWindow(QMainWindow):
         self.button_music.setToolTip(self.tr("Select background music file"))
         self.button_music.clicked.connect(self.onMusic)
         self.label_music = QLabel("")
+        self.label_music.setStyleSheet("QLabel { max-width: 10em; }")
         self.button_music_remove = QPushButton("✖")
         self.button_music_remove.setToolTip(self.tr("Remove selected music"))
         self.button_music_remove.clicked.connect(self.onMusicRemove)
+
+        self.label_fade = QLabel(self.tr("Fade:"))
+        self.checkbox_fade_in = QCheckBox(self.tr("in"))
+        self.checkbox_fade_in.setChecked(self.fade_in)
+        def onFadeInToggled(checked):
+            self.fade_in = checked
+        self.checkbox_fade_in.toggled.connect(onFadeInToggled)
+        self.checkbox_fade_out = QCheckBox(self.tr("out"))
+        self.checkbox_fade_out.setChecked(True)
+        def onFadeOutToggled(checked):
+            self.fade_out = checked
+        self.checkbox_fade_out.toggled.connect(onFadeOutToggled)
+
         self.button_preview = QPushButton()
         self.button_preview.clicked.connect(self.onPreview)
         self.button_generate = QPushButton(self.tr("Save Video"))
@@ -297,7 +324,11 @@ class MainWindow(QMainWindow):
         layout_preview_buttons.addWidget(self.button_music)
         layout_preview_buttons.addWidget(self.label_music)
         layout_preview_buttons.addWidget(self.button_music_remove)
-        layout_preview_buttons.addStretch(0)
+        layout_preview_buttons.addWidget(self.label_fade)
+        layout_preview_buttons.addWidget(self.checkbox_fade_in)
+        layout_preview_buttons.addSpacing(4)
+        layout_preview_buttons.addWidget(self.checkbox_fade_out)
+        layout_preview_buttons.addStretch(4)
         layout_preview_buttons.addWidget(self.button_preview)
         layout_preview_buttons.addWidget(self.button_generate)
 
@@ -361,8 +392,11 @@ class MainWindow(QMainWindow):
         self.button_down.setEnabled(editing and row + 1 < count)
         self.spin_duration.setEnabled(editing)
         self.button_music.setEnabled(editing)
-        self.button_music_remove.setVisible(len(self.music_file) > 0)
+        has_music = len(self.music_file) > 0
+        self.button_music_remove.setVisible(has_music)
         self.button_music_remove.setEnabled(editing)
+        self.checkbox_fade_in.setEnabled(editing and has_music)
+        self.checkbox_fade_out.setEnabled(editing and has_music)
 
     def read_image_cache(self, path: str):
         if path in self.image_cache:
@@ -563,18 +597,22 @@ class MainWindow(QMainWindow):
 
         self.music_file = path
         self.music_dir = os.path.dirname(path)
-        self.label_music.setText(os.path.basename(path))
+        filename = os.path.basename(path)
+        self.label_music.setText(filename)
+        self.label_music.setToolTip(filename)
         self.update_buttons()
 
     def onMusicRemove(self):
         self.music_file = ""
         self.label_music.setText("")
+        self.label_music.setToolTip("")
         self.update_buttons()
 
     def onPreview(self):
         self.is_previewing = not self.is_previewing
         if self.is_previewing:
             if self.music_file:
+                # TODO: integrate the fade (https://stackoverflow.com/a/70218571/1806760)
                 self.player.setSource(QUrl.fromLocalFile(self.music_file))
                 self.player.play()
             self.preview_selection = self.list_images.currentRow()
@@ -617,6 +655,8 @@ class MainWindow(QMainWindow):
         self.thread_generate.images = images
         self.thread_generate.duration = self.spin_duration.value()
         self.thread_generate.music = self.music_file
+        self.thread_generate.fade_in = self.fade_in
+        self.thread_generate.fade_out = self.fade_out
         self.thread_generate.output = output
         self.thread_generate.start()
 
