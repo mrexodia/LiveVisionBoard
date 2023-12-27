@@ -1,11 +1,10 @@
 import sys
 import os
 import shutil
+import logging
 import tempfile
 import platform
 import subprocess
-
-basedir = os.path.dirname(__file__)
 
 from PySide6.QtCore import (
     QMimeDatabase,
@@ -29,6 +28,8 @@ from PySide6.QtGui import (
     QResizeEvent,
     QDesktopServices,
     QIcon,
+    QFont,
+    QFontDatabase,
 )
 from PySide6.QtWidgets import (
     QApplication,
@@ -51,6 +52,8 @@ from PySide6.QtWidgets import (
     QGraphicsPixmapItem,
     QDoubleSpinBox,
     QCheckBox,
+    QDialog,
+    QPlainTextEdit,
 )
 from PySide6.QtMultimedia import (
     QMediaPlayer,
@@ -59,10 +62,7 @@ from PySide6.QtMultimedia import (
 )
 
 
-def format_decimals(value: float, decimals: int):
-    return f"{{:.{decimals}f}}".format(value)
-
-
+# Globals
 VIDEO_FILTER = """
 split [main][tmp];
 [tmp]scale=hd1080,setsar=1,boxblur=20:20[b];
@@ -70,6 +70,14 @@ split [main][tmp];
 [b][v]overlay=(W-w)/2
 """.strip()
 TMP_DIR = ""
+basedir = os.path.dirname(__file__)
+logging.basicConfig(level=logging.DEBUG, format="%(asctime)s - %(levelname)s - %(message)s")
+logger = logging.getLogger()
+
+
+def format_decimals(value: float, decimals: int):
+    return f"{{:.{decimals}f}}".format(value)
+
 
 def generate_video(images: list[str], duration: float, music: str, fade_in: bool, fade_out: bool, output: str):
     total_duration = int(duration * len(images))
@@ -80,72 +88,65 @@ def generate_video(images: list[str], duration: float, music: str, fade_in: bool
         fade_out_start = total_duration
         fade_out_duration = 0
 
-    try:
-        if platform.system() == "Darwin":
-            ffmpeg_name = f"ffmpeg-darwin-{platform.machine()}"
-        elif platform.system() == "Windows":
-            ffmpeg_name = "ffmpeg-win32-x64.exe"
-        else:
-            return "Unsupported platform: " + platform.platform()
-        ffmpeg = os.path.join(basedir, "data", ffmpeg_name)
-        if not os.path.exists(ffmpeg):
-            ffmpeg = shutil.which("ffmpeg")
-            if ffmpeg is None:
-                # NOTE: You are probably missing the executables in the data folder
-                return "Could not find ffmpeg executable"
-            print(f"Using system ffmpeg: {ffmpeg}")
+    if platform.system() == "Darwin":
+        ffmpeg_name = f"ffmpeg-darwin-{platform.machine()}"
+    elif platform.system() == "Windows":
+        ffmpeg_name = "ffmpeg-win32-x64.exe"
+    else:
+        return "Unsupported platform: " + platform.platform()
+    ffmpeg = os.path.join(basedir, "data", ffmpeg_name)
+    if not os.path.exists(ffmpeg):
+        ffmpeg = shutil.which("ffmpeg")
+        if ffmpeg is None:
+            # NOTE: You are probably missing the executables in the data folder
+            return "Could not find ffmpeg executable"
+        logger.warning("Using system ffmpeg: {}", ffmpeg)
 
-        if music:
-            stem, _ = os.path.splitext(os.path.basename(output))
-            output_noaudio = os.path.join(os.path.dirname(output), f"{stem}.noaudio.mp4")
-        else:
-            output_noaudio = output
+    if music:
+        stem, _ = os.path.splitext(os.path.basename(output))
+        output_noaudio = os.path.join(os.path.dirname(output), f"{stem}.noaudio.mp4")
+    else:
+        output_noaudio = output
 
-        concat_script = ""
-        for image in images:
-            concat_script += f"file '{image}'\n"
-            concat_script += f"duration {format_decimals(duration, 1)}\n"
+    concat_script = ""
+    for image in images:
+        concat_script += f"file '{image}'\n"
+        concat_script += f"duration {format_decimals(duration, 1)}\n"
 
-        concat_file = os.path.join(TMP_DIR, "files.txt")
-        with open(concat_file, "w") as f:
-            f.write(concat_script)
+    concat_file = os.path.join(TMP_DIR, "files.txt")
+    with open(concat_file, "w") as f:
+        f.write(concat_script)
 
-        filter_file = os.path.join(TMP_DIR, "blur-resize.filter")
-        with open(filter_file, "w") as f:
-            f.write(VIDEO_FILTER)
+    filter_file = os.path.join(TMP_DIR, "blur-resize.filter")
+    with open(filter_file, "w") as f:
+        f.write(VIDEO_FILTER)
 
-        args1 = f'"{ffmpeg}" -y -f concat -safe 0 -i "{concat_file}" -filter_complex_script "{filter_file}" -c:v libx264 -r 30 -pix_fmt yuv420p "{output_noaudio}"'
-        print(args1)
-        result1 = subprocess.run(args1, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, shell=True)
-        output1 = result1.stdout.decode(errors="ignore").strip()
-        print(output1)
-        print("=========")
-        if result1.returncode != 0:
-            # TODO: save stdout for the error report
-            if os.path.exists(output_noaudio):
-                os.remove(output_noaudio)
-            return f"ffmpeg (1) exited with code {result1.returncode}"
+    args1 = f'"{ffmpeg}" -y -f concat -safe 0 -i "{concat_file}" -filter_complex_script "{filter_file}" -c:v libx264 -r 30 -pix_fmt yuv420p "{output_noaudio}"'
+    logger.info(f"[ffmpeg] command 1: {args1}")
+    result1 = subprocess.run(args1, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, shell=True)
+    output1 = result1.stdout.decode(errors="ignore").strip()
+    logger.info(f"[ffmpeg] exit code: {result1.returncode}, output:\n{output1}\n==========")
+    if result1.returncode != 0:
+        if os.path.exists(output_noaudio):
+            os.remove(output_noaudio)
+        return f"ffmpeg (1) exited with code {result1.returncode}"
 
-        if music:
-            args2 = f'"{ffmpeg}" -y -i "{output_noaudio}" -i "{music}" -c:v copy -filter_complex "afade=in:st=0:d={fade_in_duration},afade=out:st={fade_out_start}:d={fade_out_duration}" -map 0:v:0 -map 1:a:0 -c:a aac -b:a 192k -shortest "{output}"'
-            print(args2)
-            result2 = subprocess.run(args2, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, shell=True)
-            output2 = result2.stdout.decode(errors="ignore").strip()
-            print(output2)
-            print("=========")
+    if music:
+        args2 = f'"{ffmpeg}" -y -i "{output_noaudio}" -i "{music}" -c:v copy -filter_complex "afade=in:st=0:d={fade_in_duration},afade=out:st={fade_out_start}:d={fade_out_duration}" -map 0:v:0 -map 1:a:0 -c:a aac -b:a 192k -shortest "{output}"'
+        logger.info(f"[ffmpeg] command 2: {args2}")
+        result2 = subprocess.run(args2, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, shell=True)
+        output2 = result2.stdout.decode(errors="ignore").strip()
+        logger.info(f"[ffmpeg] exit code: {result2.returncode}, output:\n{output2}\n==========")
 
-            if os.path.exists(output_noaudio):
-                os.remove(output_noaudio)
+        if os.path.exists(output_noaudio):
+            os.remove(output_noaudio)
 
-            if result2.returncode != 0:
-                # TODO: save stdout for the error report
-                if os.path.exists(output):
-                    os.remove(output)
-                return f"ffmpeg (2) exited with code {result2.returncode}"
+        if result2.returncode != 0:
+            if os.path.exists(output):
+                os.remove(output)
+            return f"ffmpeg (2) exited with code {result2.returncode}"
 
-        return None
-    except Exception as x:
-        return str(x)
+    return None
 
 
 class GenerateVideoThread(QThread):
@@ -209,6 +210,43 @@ class DoubleSpinBox(QDoubleSpinBox):
         return format_decimals(val, self.decimals())
 
 
+class QLogHandler(logging.Handler):
+    def __init__(self, text_edit: QPlainTextEdit, level = logging.DEBUG) -> None:
+        super().__init__(level)
+        self.text_edit = text_edit
+
+    def emit(self, record) -> None:
+        message = self.format(record)
+        self.text_edit.appendPlainText(message)
+        scroll_bar = self.text_edit.verticalScrollBar()
+        scroll_bar.setValue(scroll_bar.maximum())
+
+
+class LogDialog(QDialog):
+    def __init__(self, parent: QWidget = None) -> None:
+        super().__init__(parent, Qt.WindowType.Dialog)
+
+        self.setWindowTitle(self.tr("Log"))
+        psize = parent.size()
+        self.resize(psize.width() - 300, psize.height() - 100)
+        ppos = parent.pos()
+        self.move(ppos.x() + 150, ppos.y() + 50)
+
+        self.edit_log = QPlainTextEdit()
+        self.edit_log.setReadOnly(True)
+        monospace = QFontDatabase.systemFont(QFontDatabase.SystemFont.FixedFont)
+        self.edit_log.setFont(monospace)
+        #self.edit_log.setCenterOnScroll(True)
+
+        layout = QVBoxLayout()
+        layout.setSpacing(4)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.addWidget(self.edit_log)
+        self.setLayout(layout)
+
+        logger.addHandler(QLogHandler(self.edit_log))
+
+
 class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
@@ -239,6 +277,8 @@ class MainWindow(QMainWindow):
         self.thread_generate.finished.connect(self.onFinished)
         self.fade_in = False
         self.fade_out = True
+
+        self.dialog_log = LogDialog(self)
 
         self.list_images = QListWidget()
         self.list_images.setDragEnabled(True)
@@ -674,6 +714,9 @@ class MainWindow(QMainWindow):
 
         self.setWindowTitle(self.tr("{} (saving video)").format(QApplication.applicationName()))
         self.setEnabled(False)
+        self.dialog_log.setEnabled(True)
+        self.dialog_log.show()
+        self.dialog_log.raise_()
         QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
 
         images = [self.list_images.item(row).data(Qt.ItemDataRole.UserRole) for row in range(self.list_images.count())]
@@ -692,12 +735,13 @@ class MainWindow(QMainWindow):
 
         error = self.thread_generate.error
         if error is None:
+            self.dialog_log.hide()
             QDesktopServices.openUrl(QUrl.fromLocalFile(self.thread_generate.output))
         else:
             QMessageBox.critical(
                 self,
                 self.tr("Error"),
-                self.tr("Video creation failed:\n\n{}").format(error)
+                self.tr("Video creation failed (see log for details):\n\n{}").format(error)
             )
 
 
