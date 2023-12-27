@@ -1,1 +1,3 @@
 PySide6==6.6.1
+# https://www.pythonguis.com/tutorials/packaging-pyside6-applications-pyinstaller-macos-dmg/
+PyInstaller

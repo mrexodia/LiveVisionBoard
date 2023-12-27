@@ -236,6 +236,9 @@ class MainWindow(QMainWindow):
         self.label_image.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self.label_image.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
+        self.label_author = QLabel(f"<a href=\"https://github.com/mrexodia/LiveVisionBoard\">{self.tr('About')}</a>")
+        self.label_author.setTextInteractionFlags(Qt.TextInteractionFlag.TextBrowserInteraction)
+        self.label_author.setOpenExternalLinks(True)
         self.button_clear = QPushButton(self.tr("Clear"))
         self.button_clear.clicked.connect(self.onImageClear)
         self.button_clear.setToolTip(self.tr("Remove all images"))
@@ -243,6 +246,7 @@ class MainWindow(QMainWindow):
         layout_list_bottom = QHBoxLayout()
         layout_list_bottom.setSpacing(4)
         layout_list_bottom.setContentsMargins(0, 0, 0, 0)
+        layout_list_bottom.addWidget(self.label_author)
         layout_list_bottom.addStretch()
         layout_list_bottom.addWidget(self.button_clear)
 
@@ -680,7 +684,7 @@ def main():
     app = QApplication(sys.argv)
     app.setOrganizationName("Ogilvie")
     app.setOrganizationDomain("ogilvie.pl")
-    app.setApplicationName("MusicSlides")
+    app.setApplicationName("Live VisionBoard")
     main = MainWindow()
     main.show()
     main.raise_()
@@ -688,7 +692,7 @@ def main():
 
 
 if __name__ == "__main__":
-    TMP_DIR = tempfile.mkdtemp("MusicSlides")
+    TMP_DIR = tempfile.mkdtemp("Live VisionBoard")
     try:
         main()
     finally:
