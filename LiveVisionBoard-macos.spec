@@ -4,7 +4,10 @@
 a = Analysis(
     ['app.py'],
     pathex=[],
-    binaries=[],
+    binaries=[
+        ('data/ffmpeg-darwin-arm64', 'data'),
+        ('data/ffmpeg-darwin-x64', 'data'),
+    ],
     datas=[],
     hiddenimports=[],
     hookspath=[],
@@ -28,7 +31,7 @@ exe = EXE(
     console=False,
     disable_windowed_traceback=False,
     argv_emulation=False,
-    target_arch=None,
+    target_arch='universal2',
     codesign_identity=None,
     entitlements_file=None,
 )

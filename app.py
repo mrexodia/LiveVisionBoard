@@ -2,7 +2,10 @@ import sys
 import os
 import shutil
 import tempfile
+import platform
 import subprocess
+
+basedir = os.path.dirname(__file__)
 
 from PySide6.QtCore import (
     QMimeDatabase,
@@ -77,8 +80,19 @@ def generate_video(images: list[str], duration: float, music: str, fade_in: bool
         fade_out_duration = 0
 
     try:
-        # TODO: download for system
-        ffmpeg = "/opt/homebrew/bin/ffmpeg"
+        if platform.system() == "Darwin":
+            ffmpeg_name = f"ffmpeg-darwin-{platform.machine()}"
+        elif platform.system() == "Windows":
+            ffmpeg_name = "ffmpeg-win32-x64.exe"
+        else:
+            return "Unsupported platform: " + platform.platform()
+        ffmpeg = os.path.join(basedir, "data", ffmpeg_name)
+        if not os.path.exists(ffmpeg):
+            ffmpeg = shutil.which("ffmpeg")
+            if ffmpeg is None:
+                # NOTE: You are probably missing the executables in the data folder
+                return "Could not find ffmpeg executable"
+            print(f"Using system ffmpeg: {ffmpeg}")
 
         if music:
             stem, _ = os.path.splitext(os.path.basename(output))
