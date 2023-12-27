@@ -8,7 +8,7 @@ a = Analysis(
         ('data/ffmpeg-darwin-arm64', 'data'),
         ('data/ffmpeg-darwin-x64', 'data'),
     ],
-    datas=[],
+    datas=[('data/icon.png', 'data')],
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},

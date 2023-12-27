@@ -28,6 +28,7 @@ from PySide6.QtGui import (
     QPainter,
     QResizeEvent,
     QDesktopServices,
+    QIcon,
 )
 from PySide6.QtWidgets import (
     QApplication,
@@ -216,6 +217,7 @@ class MainWindow(QMainWindow):
         self.resize(1200, 520)
         self.move(QGuiApplication.primaryScreen().geometry().center() - self.frameGeometry().center())
         self.setAcceptDrops(True)
+        self.setWindowIcon(QIcon(os.path.join(basedir, "data", "icon.png")))
 
         self.mimedb = QMimeDatabase()
         self.settings = QSettings()
@@ -271,18 +273,23 @@ class MainWindow(QMainWindow):
         layout_list_label.addWidget(self.list_images)
         layout_list_label.addLayout(layout_list_bottom)
 
+        max_width = 30
         self.button_add = QPushButton("+")
         self.button_add.clicked.connect(self.onImageAdd)
         self.button_add.setToolTip(self.tr("Add new image after selection"))
+        self.button_add.setMaximumWidth(max_width)
         self.button_remove = QPushButton("-")
         self.button_remove.clicked.connect(self.onImageRemove)
         self.button_remove.setToolTip(self.tr("Remove selected image"))
+        self.button_remove.setMaximumWidth(max_width)
         self.button_up = QPushButton("↑")
         self.button_up.setToolTip(self.tr("Move selected image up"))
         self.button_up.clicked.connect(self.onImageUp)
+        self.button_up.setMaximumWidth(max_width)
         self.button_down = QPushButton("↓")
         self.button_down.setToolTip(self.tr("Move selected image down"))
         self.button_down.clicked.connect(self.onImageDown)
+        self.button_down.setMaximumWidth(max_width)
 
         layout_list_buttons = QVBoxLayout()
         layout_list_buttons.setSpacing(4)
