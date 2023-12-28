@@ -17,6 +17,7 @@ from PySide6.QtCore import (
     QSettings,
     QTimer,
     QThread,
+    Signal,
 )
 from PySide6.QtGui import (
     QDragEnterEvent,
@@ -28,8 +29,8 @@ from PySide6.QtGui import (
     QResizeEvent,
     QDesktopServices,
     QIcon,
-    QFont,
     QFontDatabase,
+    QAction,
 )
 from PySide6.QtWidgets import (
     QApplication,
@@ -210,16 +211,21 @@ class DoubleSpinBox(QDoubleSpinBox):
         return format_decimals(val, self.decimals())
 
 
-class QLogHandler(logging.Handler):
-    def __init__(self, text_edit: QPlainTextEdit, level = logging.DEBUG) -> None:
+# Reference: https://stackoverflow.com/a/66664679/1806760
+class QLogger(QObject):
+    message = Signal(str)
+
+
+class QLoggerHandler(logging.Handler):
+    message = Signal(str)
+
+    def __init__(self, logger: QLogger = None, level = logging.DEBUG) -> None:
         super().__init__(level)
-        self.text_edit = text_edit
+        self.logger = logger
 
     def emit(self, record) -> None:
         message = self.format(record)
-        self.text_edit.appendPlainText(message)
-        scroll_bar = self.text_edit.verticalScrollBar()
-        scroll_bar.setValue(scroll_bar.maximum())
+        self.logger.message.emit(message)
 
 
 class LogDialog(QDialog):
@@ -236,7 +242,6 @@ class LogDialog(QDialog):
         self.edit_log.setReadOnly(True)
         monospace = QFontDatabase.systemFont(QFontDatabase.SystemFont.FixedFont)
         self.edit_log.setFont(monospace)
-        #self.edit_log.setCenterOnScroll(True)
 
         layout = QVBoxLayout()
         layout.setSpacing(4)
@@ -244,7 +249,14 @@ class LogDialog(QDialog):
         layout.addWidget(self.edit_log)
         self.setLayout(layout)
 
-        logger.addHandler(QLogHandler(self.edit_log))
+        qlogger = QLogger(self)
+        qlogger.message.connect(self.onMessage)
+        logger.addHandler(QLoggerHandler(qlogger))
+
+    def onMessage(self, message: str):
+        self.edit_log.appendPlainText(message)
+        scroll_bar = self.edit_log.verticalScrollBar()
+        scroll_bar.setValue(scroll_bar.maximum())
 
 
 class MainWindow(QMainWindow):
@@ -414,6 +426,12 @@ class MainWindow(QMainWindow):
         central = QWidget()
         central.setLayout(layout_main)
         self.setCentralWidget(central)
+
+        self.action_log = QAction(self.tr("Log"))
+        self.action_log.triggered.connect(self.onLog)
+        self.action_log.setShortcut("Ctrl+L")
+        self.action_log.setShortcutContext(Qt.ShortcutContext.ApplicationShortcut)
+        self.addAction(self.action_log)
 
         self.update_buttons()
 
@@ -702,6 +720,11 @@ class MainWindow(QMainWindow):
         else:
             self.list_images.setCurrentRow(row)
 
+    def onLog(self):
+        self.dialog_log.setEnabled(True)
+        self.dialog_log.show()
+        self.dialog_log.raise_()
+
     def onGenerate(self):
         output, _ = QFileDialog.getSaveFileName(
             self,
@@ -714,9 +737,7 @@ class MainWindow(QMainWindow):
 
         self.setWindowTitle(self.tr("{} (saving video)").format(QApplication.applicationName()))
         self.setEnabled(False)
-        self.dialog_log.setEnabled(True)
-        self.dialog_log.show()
-        self.dialog_log.raise_()
+        self.onLog()
         QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
 
         images = [self.list_images.item(row).data(Qt.ItemDataRole.UserRole) for row in range(self.list_images.count())]
