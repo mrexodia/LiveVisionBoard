@@ -67,8 +67,8 @@ from PySide6.QtMultimedia import (
 VIDEO_FILTER = """
 split [main][tmp];
 [tmp]scale=hd1080,setsar=1,boxblur=20:20[b];
-[main]scale=-1:1080[v];
-[b][v]overlay=(W-w)/2
+[main]scale=1920:1080:force_original_aspect_ratio=decrease:eval=frame[v];
+[b][v]overlay=(W-w)/2:(H-h)/2:eval=frame
 """.strip()
 TMP_DIR = ""
 basedir = os.path.dirname(__file__)
@@ -109,10 +109,39 @@ def generate_video(images: list[str], duration: float, music: str, fade_in: bool
     else:
         output_noaudio = output
 
+    def ffmpeg_escape(path):
+        escaped = ""
+        for ch in path:
+            if ch == "\\":
+                escaped += "/"
+            elif ch == " ":
+                escaped += "\\ "
+            elif ch == "'":
+                escaped += "\\'"
+            else:
+                escaped += ch
+        return escaped
+
+    image_dir = os.path.join(TMP_DIR, "images")
+    if os.path.exists(image_dir):
+        shutil.rmtree(image_dir)
+    os.mkdir(image_dir)
+
+    logger.info("Converting images:")
     concat_script = ""
-    for image in images:
-        concat_script += f"file '{image}'\n"
+    for i, image in enumerate(images):
+        tmp_image = os.path.join(image_dir, f"image{i:03d}.jpg")
+        logger.info(f"  {image} -> {tmp_image}")
+        reader = QImageReader(image)
+        if not reader.canRead():
+            return reader.errorString()
+        QPixmap.fromImageReader(reader).save(tmp_image)
+        concat_script += f"file {ffmpeg_escape(tmp_image)}\n"
         concat_script += f"duration {format_decimals(duration, 1)}\n"
+
+    # Append a black image at the end because of some bug
+    black_jpg = os.path.join(basedir, "data", "black.jpg")
+    concat_script += f"file {ffmpeg_escape(black_jpg)}\n"
 
     concat_file = os.path.join(TMP_DIR, "files.txt")
     with open(concat_file, "w") as f:
@@ -132,6 +161,8 @@ def generate_video(images: list[str], duration: float, music: str, fade_in: bool
             os.remove(output_noaudio)
         return f"ffmpeg (1) exited with code {result1.returncode}"
 
+    shutil.rmtree(image_dir)
+
     if music:
         args2 = f'"{ffmpeg}" -y -i "{output_noaudio}" -i "{music}" -c:v copy -filter_complex "afade=in:st=0:d={fade_in_duration},afade=out:st={fade_out_start}:d={fade_out_duration}" -map 0:v:0 -map 1:a:0 -c:a aac -b:a 192k -shortest "{output}"'
         logger.info(f"[ffmpeg] command 2: {args2}")
@@ -139,13 +170,13 @@ def generate_video(images: list[str], duration: float, music: str, fade_in: bool
         output2 = result2.stdout.decode(errors="ignore").strip()
         logger.info(f"[ffmpeg] exit code: {result2.returncode}, output:\n{output2}\n==========")
 
-        if os.path.exists(output_noaudio):
-            os.remove(output_noaudio)
-
         if result2.returncode != 0:
             if os.path.exists(output):
                 os.remove(output)
             return f"ffmpeg (2) exited with code {result2.returncode}"
+
+        if os.path.exists(output_noaudio):
+            os.remove(output_noaudio)
 
     return None
 
@@ -272,7 +303,11 @@ class MainWindow(QMainWindow):
         self.mimedb = QMimeDatabase()
         self.settings = QSettings()
         self._music_dir = self.settings.value("music_dir", "")
+        if not os.path.exists(self._music_dir):
+            self._music_dir = ""
         self._image_dir = self.settings.value("image_dir", "")
+        if not os.path.exists(self._image_dir):
+            self._image_dir = ""
         self.is_previewing = False
         self.preview_selection = -1
         self.timer_preview = QTimer(self)
@@ -375,6 +410,7 @@ class MainWindow(QMainWindow):
         self.button_music_remove = QPushButton("✖")
         self.button_music_remove.setToolTip(self.tr("Remove selected music"))
         self.button_music_remove.clicked.connect(self.onMusicRemove)
+        self.button_music_remove.setMaximumWidth(max_width)
 
         self.label_fade = QLabel(self.tr("Fade:"))
         self.checkbox_fade_in = QCheckBox(self.tr("in"))
@@ -770,7 +806,7 @@ def main():
     app = QApplication(sys.argv)
     app.setOrganizationName("Ogilvie")
     app.setOrganizationDomain("ogilvie.pl")
-    app.setApplicationName("Live VisionBoard")
+    app.setApplicationName("LiveVisionBoard")
     main = MainWindow()
     main.show()
     main.raise_()
@@ -778,7 +814,7 @@ def main():
 
 
 if __name__ == "__main__":
-    TMP_DIR = tempfile.mkdtemp("Live VisionBoard")
+    TMP_DIR = tempfile.mkdtemp("LiveVisionBoard")
     try:
         main()
     finally:

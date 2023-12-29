@@ -8,7 +8,10 @@ a = Analysis(
         ('data/ffmpeg-darwin-arm64', 'data'),
         ('data/ffmpeg-darwin-x64', 'data'),
     ],
-    datas=[('data/icon.png', 'data')],
+    datas=[
+        ('data/icon.png', 'data'),
+        ('data/black.jpg', 'data'),
+    ],
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},
@@ -23,7 +26,7 @@ exe = EXE(
     a.scripts,
     [],
     exclude_binaries=True,
-    name='Live VisionBoard',
+    name='LiveVisionBoard',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
@@ -42,11 +45,11 @@ coll = COLLECT(
     strip=False,
     upx=True,
     upx_exclude=[],
-    name='Live VisionBoard',
+    name='LiveVisionBoard',
 )
 app = BUNDLE(
     coll,
-    name='Live VisionBoard.app',
+    name='LiveVisionBoard.app',
     icon='data/icon.icns',
     bundle_identifier='pl.ogilvie.LiveVisionBoard',
 )

@@ -5,7 +5,10 @@ a = Analysis(
     ['app.py'],
     pathex=[],
     binaries=[('data\\ffmpeg-win32-x64.exe', 'data')],
-    datas=[('data\\icon.png', 'data')],
+    datas=[
+        ('data\\icon.png', 'data'),
+        ('data\\black.jpg', 'data'),
+    ],
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},
@@ -40,5 +43,5 @@ coll = COLLECT(
     strip=False,
     upx=True,
     upx_exclude=[],
-    name='Live VisionBoard',
+    name='LiveVisionBoard',
 )
